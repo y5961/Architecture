@@ -10,6 +10,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using StackExchange.Redis;
 using Serilog;
+using MongoDB.Driver;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -33,6 +34,19 @@ try
     // ===== Register Services (JWT, Auth, Scoped) =====
     var jwtSection = builder.Configuration.GetSection("Jwt");
     var key = Encoding.UTF8.GetBytes(jwtSection["Key"]);
+
+    // משיכת ההגדרות מהקובץ שהגדרנו קודם
+    var mongoSettings = builder.Configuration.GetSection("MongoDbSettings");
+
+    // רישום הלקוח (Client) כ-Singleton (נוצר פעם אחת לכל אורך חיי האפליקציה)
+    builder.Services.AddSingleton<IMongoClient>(sp =>
+        new MongoClient(mongoSettings.GetValue<string>("ConnectionString")));
+
+    // רישום בסיס הנתונים הספציפי
+    builder.Services.AddScoped(sp => {
+        var client = sp.GetRequiredService<IMongoClient>();
+        return client.GetDatabase(mongoSettings.GetValue<string>("DatabaseName"));
+    });
 
     builder.Services.AddAuthentication(options =>
     {
@@ -72,7 +86,8 @@ try
         EndPoints = { $"{redisHost}:{redisPort}" },
         Password = redisPassword,
         AllowAdmin = true,
-        Ssl = false
+        Ssl = false,
+        AbortOnConnectFail = false
     };
 
     var redisConnection = ConnectionMultiplexer.Connect(configurationOptions);
@@ -108,7 +123,7 @@ try
     // Register Repositories & Services
     builder.Services.AddScoped<IUserRepo, UserRepo>();
     builder.Services.AddScoped<IUserService, UserService>();
-    builder.Services.AddScoped<IOrderRepo, OrderRepo>();
+    builder.Services.AddScoped<IOrderRepo, MongoOrderRepo>();
     builder.Services.AddScoped<IOrderService, OrderService>();
     builder.Services.AddScoped<IGiftCategoryRepo, GiftCategoryRepo>();
     builder.Services.AddScoped<IGiftCategoryService, GiftCategoryService>();
@@ -119,6 +134,8 @@ try
     builder.Services.AddScoped<IPackageRepo, PackageRepo>();
     builder.Services.AddScoped<IPackageService, PackageService>();
     builder.Services.AddScoped<IEmailService1, EmailService>();
+    builder.Services.AddScoped<MongoMigrationService>();
+    builder.Services.AddScoped<MongoOrderQueryService>();
 
 
     var connectionString = builder.Configuration.GetConnectionString("ConnectionString");
