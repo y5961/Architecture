@@ -3,6 +3,7 @@ using ChineseAuctionAPI.DTOs;
 using ChineseAuctionAPI.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Logging;
 
 namespace ChineseAuctionAPI.Controllers
@@ -21,6 +22,7 @@ namespace ChineseAuctionAPI.Controllers
         }
 
         [HttpPost("register")]
+        [EnableRateLimiting("SlidingWindowLimiter")]
         public async Task<IActionResult> Register([FromBody] DtoLogin dto)
         {
             try
@@ -37,20 +39,35 @@ namespace ChineseAuctionAPI.Controllers
         }
 
         [HttpPost("login")]
+        [EnableRateLimiting("SlidingWindowLimiter")]
         public async Task<IActionResult> Login([FromBody] DtologinRequest dto)
         {
             try
             {
                 _logger.LogInformation("Login attempt for email: {Email}", dto.Email);
-                var resp = await _userService.LoginAsync(dto.Email, dto.Password);
+                var token = await _userService.LoginAsync(dto.Email, dto.Password);
 
-                if (resp == null)
+                if (token == null)
                 {
                     _logger.LogWarning("Invalid login attempt for email: {Email}", dto.Email);
                     return Unauthorized("Invalid credentials");
                 }
 
-                return Ok(resp);
+                // Set HttpOnly Cookie with JWT token
+                var cookieOptions = new CookieOptions
+                {
+                    HttpOnly = true,
+                    Secure = true, // Only send over HTTPS in production
+                    SameSite = SameSiteMode.Strict,
+                    Expires = DateTimeOffset.UtcNow.AddMinutes(60)
+                };
+                
+                Response.Cookies.Append("authToken", token, cookieOptions);
+                
+                _logger.LogInformation("User logged in successfully. JWT token set as HttpOnly cookie for email: {Email}", dto.Email);
+
+                // Return success response (token is already in cookie)
+                return Ok(new { message = "Login successful", token = token });
             }
             catch (Exception ex)
             {

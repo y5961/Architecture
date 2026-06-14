@@ -43,7 +43,8 @@ try
 
     // ===== Register Services (JWT, Auth, Scoped) =====
     var jwtSection = builder.Configuration.GetSection("Jwt");
-    var key = Encoding.UTF8.GetBytes(jwtSection["Key"]);
+    var keyString = jwtSection["Key"] ?? throw new InvalidOperationException("JWT Key is not configured");
+    var key = Encoding.UTF8.GetBytes(keyString);
 
     // משיכת ההגדרות מהקובץ שהגדרנו קודם
     var mongoSettings = builder.Configuration.GetSection("MongoDbSettings");
@@ -83,6 +84,36 @@ try
     builder.Services.AddAuthorization(options =>
     {
         options.AddPolicy("AdminOnly", policy => policy.RequireRole("Admin"));
+    });
+
+    // ===== Register Rate Limiting (Sliding Window) =====
+    builder.Services.AddRateLimiter(rateLimiterOptions =>
+    {
+        rateLimiterOptions.AddPolicy("SlidingWindowLimiter", httpContext =>
+            System.Threading.RateLimiting.RateLimitPartition.GetSlidingWindowLimiter(
+                partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
+                factory: partition => new System.Threading.RateLimiting.SlidingWindowRateLimiterOptions
+                {
+                    PermitLimit = 100,
+                    Window = TimeSpan.FromMinutes(1),
+                    SegmentsPerWindow = 8,
+                    QueueProcessingOrder = System.Threading.RateLimiting.QueueProcessingOrder.OldestFirst,
+                    QueueLimit = 2
+                }));
+
+        rateLimiterOptions.AddPolicy("SlidingWindowLimiterPerIP", httpContext =>
+            System.Threading.RateLimiting.RateLimitPartition.GetSlidingWindowLimiter(
+                partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
+                factory: partition => new System.Threading.RateLimiting.SlidingWindowRateLimiterOptions
+                {
+                    PermitLimit = 200,
+                    Window = TimeSpan.FromMinutes(1),
+                    SegmentsPerWindow = 8,
+                    QueueProcessingOrder = System.Threading.RateLimiting.QueueProcessingOrder.OldestFirst,
+                    QueueLimit = 2
+                }));
+
+        rateLimiterOptions.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     });
 
     // ===== Register Redis Cache =====
@@ -175,7 +206,22 @@ try
         FileProvider = new PhysicalFileProvider(
             Path.Combine(builder.Environment.ContentRootPath, "public")),
         RequestPath = "" 
-    });  
+    });
+
+    // Rate Limiting Middleware
+    app.UseRateLimiter();
+
+    // Middleware: Extract JWT from HttpOnly Cookie and add as Bearer Token
+    app.Use(async (context, next) =>
+    {
+        if (context.Request.Cookies.TryGetValue("authToken", out var token) && string.IsNullOrEmpty(context.Request.Headers["Authorization"]))
+        {
+            context.Request.Headers["Authorization"] = $"Bearer {token}";
+            Log.Information("JWT token extracted from authToken cookie and added to Authorization header");
+        }
+        await next();
+    });
+
     app.UseAuthentication();
     app.UseAuthorization();
     app.MapControllers();
