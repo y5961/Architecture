@@ -196,8 +196,18 @@ try
     });
     var app = builder.Build();
 
-    // 2. ���� ���� - ����� �� ����� HTTP ����� �����
     app.UseSerilogRequestLogging();
+
+    app.UseExceptionHandler(exceptionHandlerApp =>
+    {
+        exceptionHandlerApp.Run(async context =>
+        {
+            context.Response.StatusCode = Microsoft.AspNetCore.Http.StatusCodes.Status500InternalServerError;
+            context.Response.ContentType = "application/json";
+            var payload = System.Text.Json.JsonSerializer.Serialize(new { error = "An unexpected error occurred." });
+            await context.Response.WriteAsync(payload);
+        });
+    });
 
     if (app.Environment.IsDevelopment())
     {
